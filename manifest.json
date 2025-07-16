@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Tab History Navigator",
+  "name": "Last Tab",
   "version": "1.0",
-  "description": "Navigates to the previously active tab when a tab is closed or via toolbar button",
+  "description": "Navigates to the previously active tab when a tab is closed or via a toolbar button",
   "permissions": [
     "tabs",
     "tabGroups",
@@ -11,7 +11,7 @@
     "contextMenus"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "worker.js"
   },
   "action": {
     "default_icon": {
