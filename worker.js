@@ -2,24 +2,32 @@ let tabHistories = new Map(); // Store history per window
 
 console.log('Background script initialized at', new Date().toISOString());
 
-function onError(msg) { 
+function onError(msg, orElse) { 
   if (chrome.runtime.lastError) {
-    console.error("Error " + msg + ":", chrome.runtime.lastError.message);
-  }
+    console.error("Error " + msg + ": ", chrome.runtime.lastError.message);
+  } else if(orElse) orElse();
 }
 
-function setupMenus() {
-  chrome.contextMenus.create({
-    id: 'openHistoryPopup',
-    title: 'Show Tab History',
-    contexts: ['action']
-  }, () => onError("creating popup menu"));
+function logHistory(windowId, msg) {
+  console.log(`${msg}. History: ${tabHistories.get(windowId) || []}`);
+}
 
-  chrome.contextMenus.create({
-    id: 'showTabHistory',
-    title: 'Tab History >',
-    contexts: ['action']
-  }, () => onError("creating history menu")); 
+function setupMenus(callback) {
+  let promises = [
+    chrome.contextMenus.create({
+      id: 'openHistoryPopup',
+      title: 'Show Tab History',
+      contexts: ['action']
+    }, () => onError("creating popup menu")),
+
+    chrome.contextMenus.create({
+      id: 'showTabHistory',
+      title: 'Tab History',
+      contexts: ['action']
+    }, () => onError("creating history menu"))
+  ]
+
+  if (callback) Promise.all(promises).then(callback)
 }
 
 function openPopup() {
@@ -27,17 +35,22 @@ function openPopup() {
   chrome.windows.create({
     url: 'popup.html',
     type: 'popup',
-    width: 320,
-    height: 400
+    width: 750,
+    height: 600
   });
+}
+
+function compress(history) {
+  let h = []
+  history.forEach((x) => { if (!h || h[0] != x) h.unshift(x) })
+  return h.reverse()
 }
 
 function popHistory(windowId, rmTab) {
   let history = tabHistories.get(windowId) || [];
   let tab = rmTab ? rmTab : history.pop();
   if (rmTab) history = history.filter(id => id !== rmTab); 
-  console.log(`New history for window ${windowId}: ${history}`);
-  tabHistories.set(windowId, history)
+  tabHistories.set(windowId, compress(history))
   return tab
 }
 
@@ -45,7 +58,6 @@ function pushHistory(windowId, tabId) {
   let history = tabHistories.get(windowId) || [];
   let tab = history.push(tabId);
   if (history.length > 50) history.shift(); 
-  console.log(`New history for window ${windowId}: ${history}`);
   tabHistories.set(windowId, history);
   return tab 
 }
@@ -57,10 +69,7 @@ function lastTab(windowId, tabId, callback) {
     pushHistory(windowId, t1)
     if (t2) pushHistory(windowId, t2)
   }
-  nextTab(windowId, () => {
-     console.log(`History after switching:`, tabHistories.get(windowId) || []); 
-     if (callback) callback();
-  })
+  nextTab(windowId, callback);
   return true; 
 }
 
@@ -72,17 +81,14 @@ function nextTab(windowId, callback) {
     return;
   }
 
-  console.log(`Attempting to activate tab ${tabId} in window ${windowId}`);
+  logHistory(windowId, `Attempting to activate tab ${tabId}`)
   chrome.tabs.get(tabId, (tab) => {
     if (!chrome.runtime.lastError && tab && tab.windowId === windowId) {
       chrome.tabs.update(tabId, { active: true }, () => {
-        if (chrome.runtime.lastError) {
-          console.error('Error activating tab:', chrome.runtime.lastError.message);
-          nextTab(windowId, callback); 
-        } else {
-          console.log(`Successfully activated tab ${tabId}`);
-          if (callback) callback();
-        }
+        onError("activating tab", () => {
+          logHistory(windowId, `Successfully activated tab ${tabId}`)
+          if (callback) callback(tabId);
+        })
       });
     } else {
       console.error(`Tab ${tabId} is invalid or in wrong window:`, chrome.runtime.lastError?.message);
@@ -91,19 +97,107 @@ function nextTab(windowId, callback) {
   });
 }
 
+
+function mkHistoryMenu() {
+  const windowPromises = Array.from(tabHistories.keys()).map((windowId, index) => new Promise((resolve) => {
+    chrome.windows.get(windowId, (window) => {
+      if (chrome.runtime.lastError || !window) {
+        console.warn(`Window ${windowId} not found:`, chrome.runtime.lastError?.message);
+        resolve(null);
+      } else if (window.type === 'normal') {
+        let obj = { windowIndex: index + 1, windowId, history: (tabHistories.get(windowId) || []).toReversed() };
+        resolve(obj);
+      } else {
+        console.log(`Excluding history for ${window.type} window ${windowId}`);
+        resolve(null);
+      }
+    });
+  }));
+
+  Promise.all(windowPromises).then(results => {
+    results.forEach(result => {
+      if (result) {
+        const { windowIndex, windowId, history } = result;
+        // Create submenu for the window
+        const windowMenuId = `window_${windowIndex}`;
+        chrome.contextMenus.create({
+          id: windowMenuId,
+          parentId: 'showTabHistory',
+          title: `Window ${windowIndex}`,
+          contexts: ['action']
+        }, () => onError(`creating window menu ${windowMenuId}`));
+
+        // Fetch tab details and create menu items with unique IDs
+        const tabPromises = history.map((tabId, tabIndex) => new Promise((resolve) => {
+          chrome.tabs.get(parseInt(tabId), (tab) => {
+            if (chrome.runtime.lastError || !tab) {
+              console.warn(`Tab ${tabId} not found:`, chrome.runtime.lastError?.message);
+              resolve({ tabId, title: `Tab ${tabId} (Closed)`, windowId, tabIndex });
+            } else {
+              resolve({ tabId, title: tab.title || `Tab ${tabId}`, windowId, tabIndex });
+            }
+          });
+        }));
+        Promise.all(tabPromises).then(tabDetails => {
+          tabDetails.forEach(({ tabId, title, windowId, tabIndex }) => {
+            const tabMenuId = `tab_${windowId}_${tabId}_${tabIndex}`;
+            chrome.contextMenus.create({
+              id: tabMenuId,
+              parentId: windowMenuId,
+              title: title.length > 50 ? title.substring(0, 47) + '...' : title,
+              contexts: ['action']
+            }, () => onError(`creating tab menu ${tabMenuId}`))
+          });
+        });
+      }
+    });
+  });
+}
+
+function updateMenus() { 
+  chrome.contextMenus.removeAll(
+      () => onError("removing context menus", () => setupMenus(() => mkHistoryMenu()))
+  )
+}
+
+function activated(windowId, tabId) { 
+  pushHistory(windowId, tabId);
+  logHistory(windowId, `Tab ${tabId} activated`);
+  updateMenus(); 
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  setupMenus();
+  updateMenus();
   console.log("Context menus installed")
 });
 
+// Flag is needed because when a tab is closed, there are two activation events:
+// First the next default tab is activated, and then my listener activates the correct tab. 
+// So, this `isClosing` is set to true to make activation listener skip those events to avoid
+// polluting the history, and instead, the history is updated here explicitly, and then 
+// flag is cleared after a delay to make sure the extra event is gone. 
+// WHY NOT just set the flag here, and then clear it in activation listener after the first hit 
+// (so that it would process the other event)? Well, because sometimes the default tab happens to 
+// be the one we need, and then there is only one event, so we need to process it explicitly in that 
+// case. This way, we avoid special cases: always skip activation events during closing, and always 
+// update history explicitly in that case. 
+let isClosing = false;
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
-  console.log(`Tab ${tabId} closed in window ${removeInfo.windowId} at`, new Date().toISOString());
+  isClosing = true
+  console.log(`Tab ${tabId} closed`);
   popHistory(removeInfo.windowId, tabId)
-  nextTab(removeInfo.windowId)
+  nextTab(removeInfo.windowId, (newTabId) => { 
+    activated(removeInfo.windowId, newTabId) 
+    setTimeout(() => isClosing = false, 50)
+  })
 });
 
-
 chrome.tabs.onActivated.addListener((activeInfo) => {
+  if (isClosing) { 
+    console.log(`Skip activation event for tabId ${activeInfo.tabId}`)
+    return;
+  }
+
   chrome.tabs.get(activeInfo.tabId, (tab) => {
     if (chrome.runtime.lastError || !tab.windowId) {
       console.error('Error getting tab:', chrome.runtime.lastError?.message);
@@ -115,8 +209,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
         return;
       }
       if (window.type === 'normal') {
-        console.log(`Tab ${activeInfo.tabId} activated in window ${tab.windowId}: ${window}`);
-        pushHistory(tab.windowId, activeInfo.tabId)
+        activated(tab.windowId, activeInfo.tabId);
       } else {
         console.log(`Skipping history update for tab ${activeInfo.tabId} in ${window.type} window ${tab.windowId}`);
       }
@@ -126,7 +219,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getHistory') {
-    console.log('Popup requested history at', new Date().toISOString());
+    console.log('Popup requested history');
     let historyObject = {};
     tabHistories.forEach((history, windowId) => {
       historyObject[windowId] = history;
@@ -147,81 +240,15 @@ chrome.action.onClicked.addListener((tab) => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'openHistoryPopup') {
     openPopup()
-  } else if (info.menuItemId === 'showTabHistory') {
-    console.log('Show Tab History clicked at', new Date().toISOString());
-
-    chrome.contextMenus.removeAll(() => {
-      if (chrome.runtime.lastError) {
-        console.error('Error removing context menus:', chrome.runtime.lastError.message);
-      }
-      setupMenus();
-
-      const windowPromises = Array.from(tabHistories.keys).map((windowId, index) => new Promise((resolve) => {
-        chrome.windows.get(windowId, (window) => {
-          if (chrome.runtime.lastError || !window) {
-            console.warn(`Window ${windowId} not found:`, chrome.runtime.lastError?.message);
-            resolve(null);
-          } else if (window.type === 'normal') {
-            resolve({ windowIndex: index + 1, windowId, history: tabHistories.get(windowId) || [] });
-          } else {
-            console.log(`Excluding history for ${window.type} window ${windowId}`);
-            resolve(null);
-          }
-        });
-      }));
-
-      Promise.all(windowPromises).then(results => {
-        results.forEach(result => {
-          if (result) {
-            const { windowIndex, windowId, history } = result;
-            // Create submenu for the window
-            const windowMenuId = `window_${windowIndex}`;
-            chrome.contextMenus.create({
-              id: windowMenuId,
-              parentId: 'showTabHistory',
-              title: `Window ${windowIndex}`,
-              contexts: ['action']
-            }, () => {
-              if (chrome.runtime.lastError) {
-                console.error(`Error creating window menu ${windowMenuId}:`, chrome.runtime.lastError.message);
-              }
-            });
-
-            // Fetch tab details and create menu items with unique IDs
-            const tabPromises = history.map((tabId, tabIndex) => new Promise((resolve) => {
-              chrome.tabs.get(parseInt(tabId), (tab) => {
-                if (chrome.runtime.lastError || !tab) {
-                  console.warn(`Tab ${tabId} not found:`, chrome.runtime.lastError?.message);
-                  resolve({ tabId, title: `Tab ${tabId} (Closed)`, windowId, tabIndex });
-                } else {
-                  resolve({ tabId, title: tab.title || `Tab ${tabId}`, windowId, tabIndex });
-                }
-              });
-            }));
-
-            Promise.all(tabPromises).then(tabDetails => {
-              tabDetails.forEach(({ tabId, title, windowId, tabIndex }) => {
-                const tabMenuId = `tab_${windowId}_${tabId}_${tabIndex}`;
-                chrome.contextMenus.create({
-                  id: tabMenuId,
-                  parentId: windowMenuId,
-                  title: title.length > 50 ? title.substring(0, 47) + '...' : title,
-                  contexts: ['action']
-                }, () => {
-                  if (chrome.runtime.lastError) {
-                    console.error(`Error creating tab menu ${tabMenuId}:`, chrome.runtime.lastError.message);
-                  }
-                });
-              });
-            });
-          }
-        });
-      });
-    });
   } else if (info.menuItemId.startsWith('tab_')) {
     // Handle tab menu item click
     const [, windowId, tabId] = info.menuItemId.split('_');
     console.log(`Clicked tab ${tabId} in window ${windowId} at`, new Date().toISOString());
     lastTab(parseInt(windowId), parseInt(tabId));
   }
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  console.log(`Window ${windowId} closed, removing its history at`, new Date().toISOString());
+  tabHistories.delete(windowId);
 });
