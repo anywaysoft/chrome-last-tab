@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { width: 320px; }
+    .tab-link { display: flex; align-items: center; gap: 8px; }
+    .tab-link img { width: 16px; height: 16px; }
+  </style>
+</head>
+<body class="p-4 bg-gray-100 font-sans">
+  <h3 class="text-lg font-semibold text-gray-800 mb-4">Tab History Navigator</h3>
+  <div class="space-y-2">
+    <button id="logHistory" class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Show Tab History</button>
+    <button id="goPrevious" class="w-full bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Toggle Previous Tab</button>
+    <div id="historyOutput" class="mt-2 p-2 bg-white rounded shadow text-sm text-gray-700"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

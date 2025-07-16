@@ -1,0 +1,85 @@
+let tabHistories = new Map(); 
+let isClosing = false;
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  if (!isClosing) {
+    chrome.tabs.get(activeInfo.tabId, (tab) => {
+      if (!chrome.runtime.lastError && tab.windowId) {
+        let history = tabHistories.get(tab.windowId) || [];
+        history.push(activeInfo.tabId);
+        if (history.length > 50) history.shift();
+        tabHistories.set(tab.windowId, history);
+        console.log("Saved: " + activeInfo.tabId);
+      }
+    });
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  console.log(`Tab ${tabId} closed in window ${removeInfo.windowId} at`, new Date().toISOString());
+  isClosing = true;
+  const windowId = removeInfo.windowId;
+
+  let history = tabHistories.get(windowId) || [];
+  console.log(`History for window ${windowId} before filtering:`, history);
+  history = history.filter(id => id !== tabId); // Remove closed tab
+  console.log(`History for window ${windowId} after filtering:`, history);
+
+  // Save the updated history
+  tabHistories.set(windowId, history);
+
+  // Recursive function to try activating the next valid tab
+  function tryActivateNextTab() {
+    let lastTabId = history.length > 0 ? history.pop() : null;
+    console.log(`Popped lastTabId: ${lastTabId}`);
+    tabHistories.set(windowId, history); // Update history after pop
+
+    if (!lastTabId) {
+      console.log(`No valid tab to activate in window ${windowId}`);
+      isClosing = false;
+      return;
+    }
+
+    console.log(`Attempting to activate tab ${lastTabId}`);
+    chrome.tabs.get(lastTabId, (tab) => {
+      if (!chrome.runtime.lastError && tab && tab.windowId === windowId) {
+        console.log(`Activating tab ${lastTabId} in window ${windowId}`);
+        chrome.tabs.update(lastTabId, { active: true }, () => {
+          if (chrome.runtime.lastError) {
+            console.error('Error activating tab:', chrome.runtime.lastError.message);
+            tryActivateNextTab(); // Try the next tab if activation fails
+          } else {
+            console.log(`Successfully activated tab ${lastTabId} at`, new Date().toISOString());
+            // Re-add the activated tab to history, as in your version
+            history = tabHistories.get(windowId) || [];
+            history.push(lastTabId);
+            tabHistories.set(windowId, history);
+            console.log(`Re-added tab ${lastTabId} to history:`, history);
+            isClosing = false;
+          }
+        });
+      } else {
+        console.error(`Tab ${lastTabId} is invalid or in wrong window:`, chrome.runtime.lastError?.message);
+        tryActivateNextTab(); // Try the next tab if this one is invalid
+      }
+    });
+  }
+
+  tryActivateNextTab(); // Start trying to activate tabs
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  tabHistories.delete(windowId);
+});
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'getHistory') {
+    // Return histories for all windows
+    let historyObject = {};
+    tabHistories.forEach((history, windowId) => {
+      historyObject[windowId] = history;
+    });
+    sendResponse({ history: historyObject });
+  }
+});
+
