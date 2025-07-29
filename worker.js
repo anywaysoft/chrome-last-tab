@@ -127,7 +127,6 @@ function mkHistoryMenu() {
           contexts: ['action']
         }, () => onError(`creating window menu ${windowMenuId}`));
 
-        // Fetch tab details and create menu items with unique IDs
         const tabPromises = history.map((tabId, tabIndex) => new Promise((resolve) => {
           chrome.tabs.get(parseInt(tabId), (tab) => {
             if (chrome.runtime.lastError || !tab) {
@@ -138,6 +137,7 @@ function mkHistoryMenu() {
             }
           });
         }));
+
         Promise.all(tabPromises).then(tabDetails => {
           tabDetails.forEach(({ tabId, title, windowId, tabIndex }) => {
             const tabMenuId = `tab_${windowId}_${tabId}_${tabIndex}`;
@@ -166,9 +166,21 @@ function activated(windowId, tabId) {
   updateMenus(); 
 }
 
+function initHistory() {
+  chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+   if (chrome.runtime.lastError) 
+     console.warn(`Failed to get active tab:`, chrome.runtime.lastError?.message); 
+   else if (tabs.length == 0)
+      console.warn(`No active tab???`)
+    else {
+      activated(tabs[0].windowId, tabs[0].id);
+      console.log(`Active tab: ${tabs[0].id}`, tabs[0])
+    }
+  })
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  updateMenus();
-  console.log("Context menus installed")
+  initHistory();
 });
 
 // Flag is needed because when a tab is closed, there are two activation events:
@@ -186,8 +198,10 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   isClosing = true
   console.log(`Tab ${tabId} closed`);
   popHistory(removeInfo.windowId, tabId)
-  nextTab(removeInfo.windowId, (newTabId) => { 
-    activated(removeInfo.windowId, newTabId) 
+  nextTab(removeInfo.windowId, (newTabId) => {
+    // if the last tab got closed, we have nothing to activate, so just turn 
+    // the activation handler back on for the default event
+    if (newTabId) activated(removeInfo.windowId, newTabId); else isClosing = false;
     setTimeout(() => isClosing = false, 50)
   })
 });
@@ -251,4 +265,5 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.windows.onRemoved.addListener((windowId) => {
   console.log(`Window ${windowId} closed, removing its history at`, new Date().toISOString());
   tabHistories.delete(windowId);
+  updateMenus();
 });
