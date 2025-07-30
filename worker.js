@@ -167,14 +167,15 @@ function activated(windowId, tabId) {
 }
 
 function initHistory() {
-  chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+  chrome.tabs.query({}, function(tabs) {
    if (chrome.runtime.lastError) 
      console.warn(`Failed to get active tab:`, chrome.runtime.lastError?.message); 
    else if (tabs.length == 0)
       console.warn(`No active tab???`)
     else {
-      activated(tabs[0].windowId, tabs[0].id);
-      console.log(`Active tab: ${tabs[0].id}`, tabs[0])
+      tabs.sort((a, b) => a.lastAccessed - b.lastAccessed)
+        .forEach(t => pushHistory(t.windowId, t.id));
+      updateMenus();  
     }
   })
 }
