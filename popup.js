@@ -1,4 +1,5 @@
-document.addEventListener('DOMContentLoaded', () => {
+  
+function mkPage() {
   console.log('Popup loaded at', new Date().toISOString());
   const outputDiv = document.getElementById('historyOutput');
   outputDiv.textContent = 'Loading history...';
@@ -67,6 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
               } else {
                 console.log('Switch response:', response);
               }
+              setTimeout(() => mkPage(), 50);
             });
           });
           titleCell.appendChild(tabLink);
@@ -88,4 +90,6 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log('Displayed history in popup');
     });
   });
-});
+}
+
+document.addEventListener('DOMContentLoaded', () => mkPage())

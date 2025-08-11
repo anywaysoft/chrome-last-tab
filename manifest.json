@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Last Tab",
-  "version": "1.1",
+  "version": "1.2.0",
   "description": "Navigates to the previously active tab when a tab is closed or via a toolbar button",
   "permissions": [
     "windows",
