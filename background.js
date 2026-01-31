@@ -320,13 +320,27 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     return;
   }
   await ensureHistoryLoaded(windowId);
-  if (CAN_USE_CONTEXT_MENUS && !chrome.contextMenus.onShown) {
+  if (CAN_USE_CONTEXT_MENUS) {
     await rebuildContextMenu(windowId);
   }
 });
 
 chrome.tabs.onCreated.addListener(async (tab) => {
   if (!tab || tab.windowId == null) {
+    return;
+  }
+  await ensureHistoryLoaded(tab.windowId);
+  await notifyManagers(tab.windowId);
+  if (CAN_USE_CONTEXT_MENUS && !chrome.contextMenus.onShown) {
+    await rebuildContextMenu(tab.windowId);
+  }
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (!tab || tab.windowId == null) {
+    return;
+  }
+  if (!changeInfo.title && !changeInfo.favIconUrl && !changeInfo.url) {
     return;
   }
   await ensureHistoryLoaded(tab.windowId);
